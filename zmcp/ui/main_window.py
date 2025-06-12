@@ -9,12 +9,13 @@ from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QDockWidget,
-    QMenuBar, QStatusBar, QMessageBox, QSplitter, QVBoxLayout, QWidget
+    QMenuBar, QStatusBar, QMessageBox, QSplitter, QVBoxLayout, QWidget, QTextEdit
 )
 
 from zmcp.core.config import config
 from zmcp.ui.server_panel import ServerPanel
 from zmcp.ui.client_panel import ClientPanel
+from zmcp.ui.a2a_tab import A2ATab
 from zmcp.ui.tools_panel import ToolsPanel
 from zmcp.ui.session_panel import SessionPanel
 from zmcp.ui.server_config_dialog import ServerConfigDialog
@@ -45,19 +46,23 @@ class MainWindow(QMainWindow):
         # Create panels
         self.server_panel = ServerPanel()
         self.client_panel = ClientPanel()
+        self.a2a_panel = A2ATab(None, self)  # Pass None for parent as it's added to tabs
 
         # Add tabs
         self.tabs.addTab(self.server_panel, "Server")
         self.tabs.addTab(self.client_panel, "Client")
+        self.tabs.addTab(self.a2a_panel, "A2A")
 
         # Create dock widgets
         self.tools_dock = QDockWidget("Tools", self)
+        self.tools_dock.setObjectName("ToolsDockWidget")
         self.tools_panel = ToolsPanel()
         self.tools_dock.setWidget(self.tools_panel)
         self.tools_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea |
                                         Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.session_dock = QDockWidget("Session", self)
+        self.session_dock.setObjectName("SessionDockWidget")
         self.session_panel = SessionPanel()
         self.session_dock.setWidget(self.session_panel)
         self.session_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea |
@@ -185,6 +190,37 @@ class MainWindow(QMainWindow):
         disconnect_action.triggered.connect(self._disconnect_from_server)
         client_menu.addAction(disconnect_action)
 
+        # A2A menu
+        a2a_menu = menu_bar.addMenu("&A2A")
+
+        start_a2a_server_action = QAction("Start A2A &Server", self)
+        start_a2a_server_action.triggered.connect(self._start_a2a_server)
+        a2a_menu.addAction(start_a2a_server_action)
+
+        stop_a2a_server_action = QAction("Stop A2A S&erver", self)
+        stop_a2a_server_action.triggered.connect(self._stop_a2a_server)
+        a2a_menu.addAction(stop_a2a_server_action)
+
+        a2a_menu.addSeparator()
+
+        connect_a2a_action = QAction("&Connect to A2A Agent", self)
+        connect_a2a_action.triggered.connect(self._connect_to_a2a_agent)
+        a2a_menu.addAction(connect_a2a_action)
+
+        disconnect_a2a_action = QAction("&Disconnect from A2A Agent", self)
+        disconnect_a2a_action.triggered.connect(self._disconnect_from_a2a_agent)
+        a2a_menu.addAction(disconnect_a2a_action)
+
+        a2a_menu.addSeparator()
+
+        import_card_action = QAction("&Import Agent Card", self)
+        import_card_action.triggered.connect(self._import_agent_card)
+        a2a_menu.addAction(import_card_action)
+
+        export_card_action = QAction("&Export Agent Card", self)
+        export_card_action.triggered.connect(self._export_agent_card)
+        a2a_menu.addAction(export_card_action)
+
         # Help menu
         help_menu = menu_bar.addMenu("&Help")
 
@@ -236,6 +272,27 @@ class MainWindow(QMainWindow):
             elif reply == QMessageBox.StandardButton.Yes:
                 self._stop_server()
 
+        # Check if A2A server is running
+        if hasattr(self.a2a_panel, "server_tab") and hasattr(self.a2a_panel.server_tab, "status_label") and self.a2a_panel.server_tab.status_label.text() == "Running":
+            reply = QMessageBox.question(
+                self, "Exit Confirmation",
+                "The A2A server is still running. Do you want to stop it before exiting?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+            )
+
+            if reply == QMessageBox.StandardButton.Cancel:
+                event.ignore()
+                return
+            elif reply == QMessageBox.StandardButton.Yes:
+                self._stop_a2a_server()
+
+        # Make sure A2A dock widgets are properly closed
+        if hasattr(self.a2a_panel, "log_dock"):
+            self.a2a_panel.log_dock.close()
+
+        if hasattr(self.a2a_panel, "task_dock"):
+            self.a2a_panel.task_dock.close()
+
         event.accept()
 
     def _set_theme(self, theme):
@@ -275,10 +332,16 @@ class MainWindow(QMainWindow):
             }
             QGroupBox {
                 border: 1px solid #555555;
-                margin-top: 1.5ex;
+                margin-top: 2.5ex;
+                padding-top: 10px;
             }
             QGroupBox::title {
                 color: #e0e0e0;
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 5px;
+                margin-top: 0.5ex;
+                background-color: #2d2d2d;
             }
             QTableWidget {
                 background-color: #252525;
@@ -342,10 +405,16 @@ class MainWindow(QMainWindow):
             }
             QGroupBox {
                 border: 1px solid #1e3a5f;
-                margin-top: 1.5ex;
+                margin-top: 2.5ex;
+                padding-top: 10px;
             }
             QGroupBox::title {
                 color: #eeff00;
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 5px;
+                margin-top: 0.5ex;
+                background-color: #0a1929;
             }
             QTableWidget {
                 background-color: #0f2744;
@@ -459,6 +528,53 @@ class MainWindow(QMainWindow):
         """Disconnect from MCP server."""
         self.client_panel._disconnect_from_server()
 
+    def _start_a2a_server(self):
+        """Start A2A server."""
+        self.tabs.setCurrentWidget(self.a2a_panel)
+        # Switch to server tab
+        self.a2a_panel.notebook.setCurrentIndex(0)  # Select the first tab (Server)
+        # Start the server
+        self.a2a_panel.server_tab._start_server()
+
+    def _stop_a2a_server(self):
+        """Stop A2A server."""
+        self.tabs.setCurrentWidget(self.a2a_panel)
+        # Switch to server tab
+        self.a2a_panel.notebook.setCurrentIndex(0)  # Select the first tab (Server)
+        # Stop the server
+        self.a2a_panel.server_tab._stop_server()
+
+    def _connect_to_a2a_agent(self):
+        """Connect to A2A agent."""
+        self.tabs.setCurrentWidget(self.a2a_panel)
+        # Switch to client tab
+        self.a2a_panel.notebook.setCurrentIndex(1)  # Select the second tab (Client)
+        # Connect to agent
+        self.a2a_panel.client_tab._connect()
+
+    def _disconnect_from_a2a_agent(self):
+        """Disconnect from A2A agent."""
+        self.tabs.setCurrentWidget(self.a2a_panel)
+        # Switch to client tab
+        self.a2a_panel.notebook.setCurrentIndex(1)  # Select the second tab (Client)
+        # Disconnect from agent
+        self.a2a_panel.client_tab._disconnect()
+
+    def _import_agent_card(self):
+        """Import agent card."""
+        self.tabs.setCurrentWidget(self.a2a_panel)
+        # Switch to client tab
+        self.a2a_panel.notebook.setCurrentIndex(1)  # Select the second tab (Client)
+        # Import agent card
+        self.a2a_panel.client_tab._import_card()
+
+    def _export_agent_card(self):
+        """Export agent card."""
+        self.tabs.setCurrentWidget(self.a2a_panel)
+        # Open dialog to export the agent card
+        QMessageBox.information(self, "Export Agent Card",
+                               "This would open a dialog to export the agent card.")
+
     def _show_about(self):
         """Show about dialog."""
         QMessageBox.about(
@@ -469,7 +585,8 @@ class MainWindow(QMainWindow):
             <p>A desktop application
             implementing the Model Context Protocol (MCP).</p>
             <p>Provides both server and client capabilities in a modern,
-            modular interface.</p>"""
+            modular interface.</p>
+            <p>Now with Agent-to-Agent (A2A) protocol support!</p>"""
         )
 
     def _on_server_started(self):
